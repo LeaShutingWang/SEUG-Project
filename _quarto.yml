@@ -1,0 +1,17 @@
+project: 
+  type: website
+
+website:
+  title: "SEUG Project"
+  navbar:
+    left:
+      - text: "Overview of SEUG Climate Characteristics"
+        href: index.qmd
+      - text: "SEUG Aridity and Soil Analysis"
+        href: Page2-Soil.qmd
+      - text: "SEUG Bare and Vegetation Analysis"
+        href: Page3-Vegetation.qmd
+
+format:
+  html:
+    css: styles.css

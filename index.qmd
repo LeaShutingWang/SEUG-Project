@@ -1,0 +1,237 @@
+---
+title: "How Does Climate Affect Soil and Vegetation in Different Locations of the SEUG National Parks?"
+---
+
+# Background
+
+The Southeastern Utah Group (SEUG) of National Parks, including Arches and Canyonlands, is located in a semi-arid to arid climate zone with diverse landscapes. The varied landscapes are due to different geographic locations, leading to varying climatic conditions that affect local soil and vegetation. This project analyzes soil, vegetation, and climate data across different SEUG locations to identify the characteristics of the local environment.
+
+# Overview of Park Climate Characteristics
+
+First, let's look at the overall climate conditions in various regions of the park from 1980 to 2024. Centered on coordinates (-110.0098, 37.59964), we divide the park into four sections: Northeast, Northwest, Southeast, and Southwest. Additionally, we classify each section into three categories based on annual average precipitation and temperature using the quartile method: High Arid, Medium Arid, and Low Arid.
+
+```{r}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+#| results: hide
+
+library(dplyr)
+library(plotly)
+library(sf) 
+library(geojsonsf)
+library(leaflet)
+library(tmap)
+library(spData)
+library(usmap)
+library(htmltools)
+library(scales)
+library(lubridate)
+library(magrittr)
+library(geojsonio)
+library(janitor)
+library(tidyverse)
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 读取数据
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# 计算 T_Average 和 PPT_Average
+data <- data %>%
+  mutate(T_Average = (T_Summer + T_Winter) / 2,
+         PPT_Average = (PPT_Summer + PPT_Winter) / 2)
+
+# 过滤掉含有缺失值的行
+data <- data %>%
+  filter(!is.na(T_Average) & !is.na(PPT_Average))
+
+# 定义分类阈值，忽略缺失值
+t_thresholds <- quantile(data$T_Average, probs = c(0.33, 0.66), na.rm = TRUE)
+ppt_thresholds <- quantile(data$PPT_Average, probs = c(0.33, 0.66), na.rm = TRUE)
+
+# 定义干旱等级判断函数
+determine_drought_level <- function(t_avg, ppt_avg, t_thresh, ppt_thresh) {
+  if (t_avg <= t_thresh[1] && ppt_avg >= ppt_thresh[2]) {
+    return('Low_Arid')
+  } else if ((t_avg > t_thresh[1] && t_avg <= t_thresh[2]) || 
+             (ppt_avg > ppt_thresh[1] && ppt_avg <= ppt_thresh[2])) {
+    return('Medium_Arid')
+  } else if (t_avg > t_thresh[2] && ppt_avg <= ppt_thresh[1]) {
+    return('High_Arid')
+  } else {
+    return('Medium_Arid')
+  }
+}
+
+# 应用判断函数
+data <- data %>%
+  rowwise() %>%
+  mutate(Drought_Level = determine_drought_level(T_Average, PPT_Average, t_thresholds, ppt_thresholds))
+
+# 使用中心点定义区域
+center_long <- -110.0098
+center_lat <- 37.59964
+
+determine_region <- function(long, lat, center_long, center_lat) {
+  if (long >= center_long && lat >= center_lat) {
+    return('Northeast')
+  } else if (long >= center_long && lat < center_lat) {
+    return('Southeast')
+  } else if (long < center_long && lat >= center_lat) {
+    return('Northwest')
+  } else {
+    return('Southwest')
+  }
+}
+
+data <- data %>%
+  rowwise() %>%
+  mutate(Region = determine_region(long, lat, center_long, center_lat))
+
+# 创建节点数据框
+nodes <- data.frame(name = c(as.character(unique(data$Drought_Level)), as.character(unique(data$Region))))
+
+# 创建链接数据框函数
+create_links <- function(data) {
+  links <- data %>%
+    group_by(Drought_Level, Region) %>%
+    summarise(value = n()) %>%
+    ungroup() %>%
+    mutate(source = match(Drought_Level, nodes$name) - 1,
+           target = match(Region, nodes$name) - 1)
+  
+  links <- links %>% select(source, target, value)
+  return(links)
+}
+
+# 全时间段数据
+all_links <- create_links(data)
+
+# 创建每十年分组数据
+decades <- seq(1980, 2020, by = 10)
+decade_data <- list()
+for (decade in decades) {
+  decade_data[[as.character(decade)]] <- data %>% filter(year >= decade & year < (decade + 10))
+}
+
+# 创建所有十年数据的links
+decade_links <- lapply(decade_data, create_links)
+```
+
+```{r, fig.cap="<span class='figure-caption'>Click on different time tabs to view the trend changes within that time period.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 创建Sankey图表
+create_sankey_plot <- function(links, visible) {
+  arid_colors <- c('Low_Arid' = '#318227', 
+                   'Medium_Arid' = '#13330f', 
+                   'High_Arid' = '#56c846')
+  region_colors <- c('Northeast' = '#041E42', 
+                     'Southeast' = '#003DA5', 
+                     'Northwest' = '#012169', 
+                     'Southwest' = '#00B5E2')
+  
+  sankey <- plot_ly(
+    type = "sankey",
+    orientation = "h",
+    node = list(
+      label = nodes$name,
+      pad = 15,
+      thickness = 20,
+      color = c(arid_colors, region_colors),
+      font = list(
+        family = "Droid Serif",
+        size = 12,
+        align = 'left',
+        color = '#433537'
+      )
+    ),
+    link = list(
+      source = links$source,
+      target = links$target,
+      value = links$value,
+      line = list(
+        color = '#433537',
+        width = 0.5
+      )
+    ),
+    visible = visible
+  )
+  return(sankey)
+}
+
+# 创建所有图表
+plots <- c(list(create_sankey_plot(all_links, TRUE)), lapply(decade_links, create_sankey_plot, FALSE))
+
+# 创建tabs
+tabs <- list(
+  list(label = "All Time",
+       method = "restyle",
+       args = list("visible", c(TRUE, rep(FALSE, length(decades))))))
+
+for (i in 1:length(decades)) {
+  tabs <- append(tabs, list(list(label = paste(decades[i], "s"),
+                                 method = "restyle",
+                                 args = list("visible", c(rep(FALSE, i), TRUE, rep(FALSE, length(decades) - i))))))
+}
+
+# 合并所有图表并添加tabs
+fig <- subplot(plots, nrows = 1, shareX = TRUE, shareY = TRUE, titleX = FALSE, titleY = FALSE) %>%
+  layout(
+    title = list(
+      text = "Sankey Diagram of Arid Levels by Region",
+      font = list(
+        family = "Droid Serif",
+        size = 16,
+        color = '#433537'
+      ),
+      y = 0.95
+    ),
+    updatemenus = list(
+      list(
+        type = "buttons",
+        direction = "left",
+        x = 0.45,
+        y = 1.15, 
+        xanchor = "center",
+        yanchor = "top",
+        pad = list('r' = 10, 't' = 10),
+        buttons = tabs,
+        font = list(
+          family = "Droid Serif",
+          size = 12,
+          color = '#433537'
+        )
+      )
+    ),
+    font = list(
+      family = "Droid Serif",
+      size = 12,
+      color = '#433537'
+    ),
+    paper_bgcolor = '#f4ede4',
+    plot_bgcolor = '#f4ede4',
+    margin = list(t = 100)  # 将顶部margin设置为100像素
+  )
+
+fig
+```
+
+From the Sankey Diagram, we can see that over the entire time period, most regions of SEUG are in Medium Arid conditions, indicating moderate temperature and precipitation. The High Arid conditions are particularly prominent in the Northeast and Northwest regions, which might suggest that the northern part of the park has more exposed rock surfaces, less vegetation cover, and lower soil water retention capacity. We will discuss this in more detail in the following sections.
+
+By selecting different time periods, we can also observe that the regions classified as High Arid have gradually increased over the years, while the Low Arid regions have gradually decreased. This suggests that SEUG may be experiencing more severe climate challenges, leading to a reduction in vegetation cover within the park.
