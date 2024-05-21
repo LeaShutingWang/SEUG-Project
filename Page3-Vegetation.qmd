@@ -1,0 +1,395 @@
+---
+format: 
+  html:
+    css: styles.css
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+#| results: hide
+
+library(dplyr)
+library(plotly)
+library(sf) 
+library(geojsonsf)
+library(leaflet)
+library(tmap)
+library(spData)
+library(usmap)
+library(htmltools)
+library(scales)
+library(lubridate)
+library(magrittr)
+library(geojsonio)
+library(janitor)
+library(tidyverse)
+
+```
+
+# SEUG Bare and Vegetation Analysis
+## What is the distribution of bare regions in SEUG?
+
+Aridity often leads to the exposure of rock surfaces, resulting in the formation of unique landscapes such as Arches and Canyonlands, which are popular with visitors. By mapping the region, we can see the distribution of bare areas within the park.
+
+```{r, fig.cap="<span class='figure-caption'>Scroll the mouse wheel to zoom in and view the distribution of bare regions.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 读取数据
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# If the column names are different, adjust accordingly
+data <- data %>% select(long, lat, Bare)
+
+# Normalize Bare values to range between 0 and 1 for color scaling
+data$Bare <- (data$Bare - min(data$Bare)) / (max(data$Bare) - min(data$Bare))
+
+# Create a color palette
+pal <- colorNumeric(palette = c("darkgreen", "lightgreen"), domain = data$Bare)
+
+# Create the interactive map
+leaflet(data) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~long, ~lat,
+    color = ~pal(Bare),
+    fillOpacity = 0.7,
+    radius = 5,
+    label = ~paste("Bare:", Bare)
+  ) %>%
+  addLegend("bottomright", pal = pal, values = ~Bare,
+            title = "Bare",
+            opacity = 1)
+```
+
+Through the map, we can see that most regions of the park have a high bare ground coverage. Specifically, the Northwest and Northeast parts have particularly high bare ground coverage, which aligns with our previous conclusion that these two regions have a high degree of aridity. Aridity and bare ground always go hand in hand.
+
+## What is the climate environment in regions with the highest vegetation cover?
+
+Now, let's set aside aridity and bare ground, and explore something new: In the SEUG park, which is known for its aridity, what are the climatic characteristics of the wettest regions with the highest vegetation coverage?
+
+```{r, fig.cap="<span class='figure-caption'>Click the dropdown menu in the top right corner to select different variables. Drag the timeline below to select the time period you want to observe.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 读取数据
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# 计算每个位置（long, lat）所有年份的平均bare值
+df_avg_bare <- data %>%
+  group_by(long, lat) %>%
+  summarize(Bare = mean(Bare, na.rm = TRUE)) %>%
+  ungroup()
+
+# 找出平均bare值最低的五个位置
+df_lowest_bare <- df_avg_bare %>%
+  arrange(Bare) %>%
+  slice(1:5)
+
+# 找出这些位置的完整数据
+df_lowest_bare_locations <- data %>%
+  filter(paste(long, lat) %in% paste(df_lowest_bare$long, df_lowest_bare$lat))
+
+# 创建一个位置标识符
+df_lowest_bare_locations <- df_lowest_bare_locations %>%
+  mutate(Location = paste("(", long, ", ", lat, ")", sep = ""))
+
+# 计算时间序列数据
+df_lowest_bare_locations <- df_lowest_bare_locations %>%
+  mutate(PPT_Average = (PPT_Winter + PPT_Summer) / 2,
+         T_Average = (T_Winter + T_Summer) / 2)
+
+# 计算五个地点的平均 PPT_Average 和 T_Average
+df_five_avg <- df_lowest_bare_locations %>%
+  group_by(year) %>%
+  summarize(PPT_Average = mean(PPT_Average, na.rm = TRUE),
+            T_Average = mean(T_Average, na.rm = TRUE))
+
+# 计算所有地点的PPT_Average和T_Average
+df_global_avg <- df_historic %>%
+  group_by(year) %>%
+  summarize(PPT_Average = mean((PPT_Winter + PPT_Summer) / 2, na.rm = TRUE),
+            T_Average = mean((T_Winter + T_Summer) / 2, na.rm = TRUE))
+
+# 创建时间序列图
+plot <- plot_ly()
+
+# 添加五个地点的平均 PPT_Average 曲线
+plot <- plot %>%
+  add_lines(data = df_five_avg, 
+            x = ~year, 
+            y = ~PPT_Average, 
+            line = list(color = '#012169', dash = 'solid'), 
+            name = 'Top 5 Locations PPT_Average')
+
+# 添加全球 PPT_Average 曲线
+plot <- plot %>%
+  add_lines(data = df_global_avg, 
+            x = ~year, 
+            y = ~PPT_Average, 
+            line = list(color = '#5FA343', dash = 'solid', width = 2), 
+            name = 'SEUG PPT_Average')
+
+# 添加五个地点的平均 T_Average 曲线（初始隐藏）
+plot <- plot %>%
+  add_lines(data = df_five_avg, 
+            x = ~year, 
+            y = ~T_Average, 
+            line = list(color = '#012169', dash = 'dash'), 
+            name = 'Top 5 Locations T_Average', 
+            visible = FALSE)
+
+# 添加全球 T_Average 曲线（初始隐藏）
+plot <- plot %>%
+  add_lines(data = df_global_avg, 
+            x = ~year, 
+            y = ~T_Average, 
+            line = list(color = '#5FA343', dash = 'dash', width = 2), 
+            name = 'SEUG T_Average', 
+            visible = FALSE)
+
+# 添加下拉框和时间轴
+plot <- plot %>%
+  layout(title = list(
+            text = "PPT_Average Over Time",
+            font = list(
+                family = "Droid Serif",
+                size = 16,
+                color = '#433537'
+            )
+        ),
+         xaxis = list(
+            title = list(
+                text = "Year",
+                font = list(
+                    family = "Droid Serif",
+                    size = 12,
+                    color = '#433537'
+                )
+            ),
+            tickfont = list(
+                family = "Droid Serif",
+                size = 12,
+                color = '#433537'
+            ),
+            rangeselector = list(
+                buttons = list(
+                    list(count = 1, label = "1 yr", step = "year", stepmode = "backward"),
+                    list(count = 5, label = "5 yrs", step = "year", stepmode = "backward"),
+                    list(count = 10, label = "10 yrs", step = "year", stepmode = "backward"),
+                    list(step = "all")
+                )
+            ),
+            rangeslider = list(
+                visible = TRUE
+            )
+        ),
+         yaxis = list(
+            title = list(
+                text = "Value",
+                font = list(
+                    family = "Droid Serif",
+                    size = 12,
+                    color = '#433537'
+                )
+            ),
+            tickfont = list(
+                family = "Droid Serif",
+                size = 12,
+                color = '#433537'
+            )
+        ),
+         legend = list(
+            font = list(
+                family = "Droid Serif",
+                size = 14,
+                color = '#433537'
+            )
+        ),
+         updatemenus = list(
+           list(
+             buttons = list(
+               list(
+                 method = "update",
+                 args = list(list(visible = c(TRUE, TRUE, FALSE, FALSE)),
+                             list(title = "PPT_Average Over Time")),
+                 label = "PPT_Average"
+               ),
+               list(
+                 method = "update",
+                 args = list(list(visible = c(FALSE, FALSE, TRUE, TRUE)),
+                             list(title = "T_Average Over Time")),
+                 label = "T_Average"
+               )
+             ),
+             direction = "down",
+             x = 0.1,
+             y = 1.15,
+             showactive = TRUE
+           )
+         ),
+         plot_bgcolor = '#f4ede4',
+         paper_bgcolor = '#f4ede4'
+  )
+
+# 打印图表
+plot
+```
+
+By selecting the average precipitation (PPT_Average) from the dropdown menu, we can see that the average precipitation in these regions with high vegetation coverage fluctuates significantly, which might be influenced by the El Niño phenomenon. Although Utah is not close to the Pacific Ocean, the frequent occurrence of El Niño can cause large fluctuations in average precipitation in regions with high vegetation coverage. This might partially explain the results shown in the chart.
+
+When we select the average temperature (T_Average), we find that the situation is much more normal. Most of the time, the temperature in regions with high vegetation coverage is significantly lower than the park's average temperature. This aligns with common knowledge.
+
+## What are the characteristics of vegetation in regions with the highest vegetation cover?
+
+Although most regions of SEUG are covered by bare ground, there are still some drought-resistant plants dominated by shrubs within the park. By analyzing the areas with the highest vegetation coverage, we can better understand the distribution of plants within the park.
+
+```{r, fig.cap="<span class='figure-caption'>Move the cursor to view the specific Coverage Percentage.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 读取数据
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# 计算每个位置（long, lat）所有年份的平均bare值
+df_avg_bare <- data %>%
+  group_by(long, lat) %>%
+  summarize(across(c(Bare, Herb, Litter, Shrub, treecanopy), mean, na.rm = TRUE)) %>%
+  ungroup()
+
+# 找出平均bare值最低的五个位置
+df_lowest_bare <- df_avg_bare %>%
+  arrange(Bare) %>%
+  slice(1:5)
+
+# 转换为长格式，方便绘图
+df_long <- df_lowest_bare %>%
+  pivot_longer(cols = c(Bare, Herb, Litter, Shrub, treecanopy),
+               names_to = "CoverType", values_to = "Value")
+
+# 计算每个特征的全局平均值
+df_global_avg <- data %>%
+  summarize(across(c(Bare, Herb, Litter, Shrub, treecanopy), mean, na.rm = TRUE))
+
+# 转换为长格式
+df_global_avg_long <- df_global_avg %>%
+  pivot_longer(cols = everything(), 
+               names_to = "CoverType", 
+               values_to = "GlobalAvg")
+
+# 合并数据
+df_long <- df_long %>%
+  left_join(df_global_avg_long, by = "CoverType")
+
+# 创建一个位置标识符
+df_long <- df_long %>%
+  mutate(Location = paste("(", long, ", ", lat, ")", sep = ""))
+
+# 定义颜色调色板
+palette_colors <- c("#00B5E2", "#862633", "#5FA343", "#D50032", "#F8E08E")
+
+# 为不同位置分配颜色
+location_colors <- setNames(palette_colors, unique(df_long$Location))
+
+# 绘制柱状图和平均值点
+plot <- plot_ly() %>%
+  add_bars(data = df_long, 
+           x = ~CoverType, 
+           y = ~Value, 
+           color = ~Location, 
+           colors = location_colors,
+           text = ~Location,
+           hoverinfo = 'text+y',
+           barmode = 'group') %>%
+  add_markers(data = df_global_avg_long, 
+              x = ~CoverType, 
+              y = ~GlobalAvg, 
+              marker = list(size = 10, symbol = 'x', color = '#041E42'), 
+              name = 'SEUG Avg') %>%
+  layout(title = list(
+            text = "Vegetation Cover at Locations with Lowest Average Bare Soil",
+            font = list(
+                family = "Droid Serif",
+                size = 16,
+                color = '#433537'
+            )
+        ),
+         xaxis = list(
+            title = list(
+                text = "Vegetation Cover Type",
+                font = list(
+                    family = "Droid Serif",
+                    size = 12,
+                    color = '#433537'
+                )
+            ),
+            tickfont = list(
+                family = "Droid Serif",
+                size = 12,
+                color = '#433537'
+            )
+        ),
+         yaxis = list(
+            title = list(
+                text = "Percentage Cover",
+                font = list(
+                    family = "Droid Serif",
+                    size = 12,
+                    color = '#433537'
+                )
+            ),
+            tickfont = list(
+                family = "Droid Serif",
+                size = 12,
+                color = '#433537'
+            )
+        ),
+         legend = list(
+            font = list(
+                family = "Droid Serif",
+                size = 14,
+                color = '#433537'
+            )
+        ),
+         plot_bgcolor = '#f4ede4',
+         paper_bgcolor = '#f4ede4'
+  )
+
+# 打印图表
+plot
+```
+
+From the chart, we can see that overall, in areas with high vegetation coverage, shrubs are the predominant plants, followed by trees (as determined by tree canopy) and litter. Additionally, there are significant differences in vegetation distribution between different regions. Generally, the greater the longitude, the higher the density of shrubs and the lower the density of herbs. We can observe that even in areas with high vegetation coverage, the plant distribution in SEUG is completely different from that in DC. Visiting the park would surely be a unique and unforgettable experience.
+
+## Conclusions
+
+1. Overall, the climate in the Northwestern and Northeastern parts of The Southeastern Utah Group of National Parks is particularly dry and hot, resulting in very low soil water content, large bare areas, and sparse or even absent vegetation.
+
+2. In most regions of SEUG, the climate characterized by low precipitation and high temperatures represents aridity, with large bare areas and low soil water content.
+
+3. However, there are exceptions. In some areas, high precipitation is offset by high temperatures, and despite high soil water content, these regions can still experience dryness in the summer.
+
+4. In the regions within SEUG with the highest vegetation coverage, precipitation fluctuates greatly, but temperatures remain stable and are generally lower than the park's average temperature.
+
+5. In areas with high vegetation coverage, shrubs are the predominant plants, followed by trees and litter.
+
+6. Even among areas with high vegetation coverage, there are significant differences in vegetation distribution between regions. Generally, the greater the longitude, the higher the density of shrubs and the lower the density of herbs.

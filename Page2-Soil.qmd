@@ -1,0 +1,608 @@
+---
+format: 
+  html:
+    css: styles.css
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+#| results: hide
+
+library(dplyr)
+library(plotly)
+library(sf) 
+library(geojsonsf)
+library(leaflet)
+library(tmap)
+library(spData)
+library(usmap)
+library(htmltools)
+library(scales)
+library(lubridate)
+library(magrittr)
+library(geojsonio)
+library(janitor)
+library(tidyverse)
+
+```
+
+# SEUG Aridity and Soil Analysis
+## What is the distribution of arid regions in SEUG?
+
+Aridity is the most significant characteristic of SEUG, contributing to the park's stunning landscapes. By calculating the annual average number of dry soil days in different regions, we can identify the severity of drought in various parts of the park.
+
+```{r, fig.cap="<span class='figure-caption'>Scroll the mouse wheel to zoom in and view the distribution of arid regions.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# If the column names are different, adjust accordingly
+data <- data %>% select(long, lat, year,DrySoilDays_Summer_whole)
+
+# Calculate the total DrySoilDays_Summer_whole for each location
+total_dry_soil_days <- data %>% 
+  group_by(long, lat) %>% 
+  summarise(total_dry_soil_days = sum(DrySoilDays_Summer_whole, na.rm = TRUE))
+
+# Create a color palette
+pal <- colorNumeric(palette = "Reds", domain = df_historic$total_dry_soil_days)
+
+# Create the interactive map
+leaflet(total_dry_soil_days) %>%
+  addTiles() %>%
+  addCircleMarkers(
+    ~long, ~lat,
+    color = ~pal(total_dry_soil_days),
+    fillOpacity = 0.7,
+    radius = 5,
+    label = ~paste("Long:", long, "Lat:", lat, "DrySoilDays_Summer:", total_dry_soil_days)
+  ) %>%
+  addLegend("bottomright", pal = pal, values = ~total_dry_soil_days,
+            title = "DrySoilDays_Summer",
+            opacity = 1)
+```
+
+
+Through the map, we can observe that the regions with severe drought are primarily located on the edges of the park. In contrast, the central part, particularly the Natural Bridges National Monument area, has almost no dry soil days in the summer. This might be because the shade provided by the Monument reduces evaporation, and the higher elevation brings lower temperatures and more precipitation.
+
+## What is the climate environment in the arid region?
+
+After understanding the general distribution of arid regions, we want to explore the climatic characteristics of these areas in more detail. To do this, we calculated the annual average number of Dry Soil days for each region and selected the top five as the most drought-affected regions for further study.
+
+```{r, fig.cap="<span class='figure-caption'>Click the dropdown menu in the top right corner to select different variables. Drag the timeline below to select the time period you want to observe.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# 计算每个位置（long, lat）所有年份的平均 DrySoilDays_Summer_whole 天数
+df_avg_drysoil <- data %>%
+  group_by(long, lat) %>%
+  summarize(TotalDrySoilDays = sum(DrySoilDays_Summer_whole, na.rm = TRUE)) %>%
+  ungroup()
+
+# 找出总 DrySoilDays_Summer_whole 天数最高的五个位置
+df_highest_drysoil <- df_avg_drysoil %>%
+  arrange(desc(TotalDrySoilDays)) %>%
+  slice(1:5)
+
+# 找出这些位置的完整数据
+df_highest_drysoil_locations <- data %>%
+  filter(paste(long, lat) %in% paste(df_highest_drysoil$long, df_highest_drysoil$lat))
+
+# 创建一个位置标识符
+df_highest_drysoil_locations <- df_highest_drysoil_locations %>%
+  mutate(Location = paste("(", long, ", ", lat, ")", sep = ""))
+
+# 计算时间序列数据
+df_highest_drysoil_locations <- df_highest_drysoil_locations %>%
+  mutate(PPT_Average = (PPT_Winter + PPT_Summer) / 2,
+         T_Average = (T_Winter + T_Summer) / 2)
+
+# 计算五个地点的平均 PPT_Average 和 T_Average
+df_five_avg <- df_highest_drysoil_locations %>%
+  group_by(year) %>%
+  summarize(PPT_Average = mean(PPT_Average, na.rm = TRUE),
+            T_Average = mean(T_Average, na.rm = TRUE))
+
+# 计算所有地点的 PPT_Average 和 T_Average
+df_global_avg <- data %>%
+  group_by(year) %>%
+  summarize(PPT_Average = mean((PPT_Winter + PPT_Summer) / 2, na.rm = TRUE),
+            T_Average = mean((T_Winter + T_Summer) / 2, na.rm = TRUE))
+
+# 创建时间序列图
+plot <- plot_ly()
+
+# 添加五个地点的平均 PPT_Average 曲线
+plot <- plot %>%
+  add_lines(data = df_five_avg, 
+            x = ~year, 
+            y = ~PPT_Average, 
+            line = list(color = '#012169', dash = 'solid'), 
+            name = 'Top 5 Locations PPT_Average')
+
+# 添加全球 PPT_Average 曲线
+plot <- plot %>%
+  add_lines(data = df_global_avg, 
+            x = ~year, 
+            y = ~PPT_Average, 
+            line = list(color = '#5FA343', dash = 'solid', width = 2), 
+            name = 'SEUG PPT_Average')
+
+# 添加五个地点的平均 T_Average 曲线（初始隐藏）
+plot <- plot %>%
+  add_lines(data = df_five_avg, 
+            x = ~year, 
+            y = ~T_Average, 
+            line = list(color = '#012169', dash = 'dash'), 
+            name = 'Top 5 Locations T_Average', 
+            visible = FALSE)
+
+# 添加全球 T_Average 曲线（初始隐藏）
+plot <- plot %>%
+  add_lines(data = df_global_avg, 
+            x = ~year, 
+            y = ~T_Average, 
+            line = list(color = '#5FA343', dash = 'dash', width = 2), 
+            name = 'SEUG T_Average', 
+            visible = FALSE)
+
+# 添加下拉框和时间拖动条
+plot <- plot %>%
+  layout(
+    title = list(
+      text = "PPT_Average Over Time",
+      font = list(
+        family = "Droid Serif",
+        size = 16,
+        color = '#433537'
+      )
+    ),
+    xaxis = list(
+      title = "Year",
+      titlefont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      ),
+      tickfont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      ),
+      rangeselector = list(
+        buttons = list(
+          list(
+            count = 1,
+            label = "1 yr",
+            step = "year",
+            stepmode = "backward"
+          ),
+          list(
+            count = 5,
+            label = "5 yrs",
+            step = "year",
+            stepmode = "backward"
+          ),
+          list(
+            count = 10,
+            label = "10 yrs",
+            step = "year",
+            stepmode = "backward"
+          ),
+          list(step = "all")
+        )
+      ),
+      rangeslider = list(
+        visible = TRUE
+      )
+    ),
+    yaxis = list(
+      title = "Value",
+      titlefont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      ),
+      tickfont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      )
+    ),
+    legend = list(
+      font = list(
+        family = "Droid Serif",
+        size = 14,
+        color = '#433537'
+      )
+    ),
+    updatemenus = list(
+      list(
+        buttons = list(
+          list(
+            method = "update",
+            args = list(list(visible = c(TRUE, TRUE, FALSE, FALSE)),
+                        list(title = "PPT_Average Over Time")),
+            label = "PPT_Average"
+          ),
+          list(
+            method = "update",
+            args = list(list(visible = c(FALSE, FALSE, TRUE, TRUE)),
+                        list(title = "T_Average Over Time")),
+            label = "T_Average"
+          )
+        ),
+        direction = "down",
+        x = 0.1,
+        y = 1.15,
+        showactive = TRUE
+      )
+    ),
+    plot_bgcolor = '#f4ede4',
+    paper_bgcolor = '#f4ede4'
+  )
+
+# 打印图表
+plot
+```
+
+By selecting the average precipitation (PPT_Average) from the dropdown menu, we can observe that although the average precipitation in arid regions may exceed the park's average in some years, it is mostly below the park's average. When we select the average temperature (T_Average), we can see that, in contrast to precipitation, the temperature in arid regions is mostly higher than the park's average. 
+
+Although the difference may not appear very significant on the graph, we can conclude that the results align with expectations: arid regions have lower precipitation and higher temperatures compared to the average levels.
+
+## What is the soil water content in the arid region?
+
+Generally speaking, for arid regions, we would assume that the soil water content is lower than the park's average across all seasons—spring, summer, fall, and winter. To investigate whether this assumption holds true for SEUG, we have plotted the soil water content of the five most arid regions across different seasons.
+
+```{r, fig.cap="<span class='figure-caption'>Click the dropdown menu in the top right corner to select different variables.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 读取数据
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# 计算每个位置（long, lat）所有年份的总 DrySoilDays_Summer_whole 天数
+df_total_drysoil <- data %>%
+  group_by(long, lat) %>%
+  summarize(TotalDrySoilDays = sum(DrySoilDays_Summer_whole, na.rm = TRUE)) %>%
+  ungroup()
+
+# 找出总 DrySoilDays_Summer_whole 天数最高的五个位置
+df_highest_drysoil <- df_total_drysoil %>%
+  arrange(desc(TotalDrySoilDays)) %>%
+  slice(1:5)
+
+# 找出这些位置的完整数据
+df_highest_drysoil_locations <- data %>%
+  filter(paste(long, lat) %in% paste(df_highest_drysoil$long, df_highest_drysoil$lat))
+
+# 创建一个位置标识符
+df_highest_drysoil_locations <- df_highest_drysoil_locations %>%
+  mutate(Location = paste("(", long, ", ", lat, ")", sep = ""))
+
+# 计算春夏秋冬的土壤含水量平均值
+df_seasonal_vwc <- df_highest_drysoil_locations %>%
+  group_by(Location) %>%
+  summarize(
+    VWC_Winter = mean(VWC_Winter_whole, na.rm = TRUE),
+    VWC_Spring = mean(VWC_Spring_whole, na.rm = TRUE),
+    VWC_Summer = mean(VWC_Summer_whole, na.rm = TRUE),
+    VWC_Fall = mean(VWC_Fall_whole, na.rm = TRUE)
+  )
+
+# 计算所有地点的春夏秋冬的土壤含水量平均值
+df_global_vwc <- data %>%
+  summarize(
+    VWC_Winter = mean(VWC_Winter_whole, na.rm = TRUE),
+    VWC_Spring = mean(VWC_Spring_whole, na.rm = TRUE),
+    VWC_Summer = mean(VWC_Summer_whole, na.rm = TRUE),
+    VWC_Fall = mean(VWC_Fall_whole, na.rm = TRUE)
+  )
+
+# 创建柱状图
+plot <- plot_ly()
+
+# 定义颜色
+colors <- c('#012169','#5FA343','#F8E08E','#862633')
+
+# 添加春季土壤含水量柱状图和所有数据的平均值直线
+plot <- plot %>%
+  add_trace(data = df_seasonal_vwc, 
+            x = ~Location, 
+            y = ~VWC_Winter, 
+            type = 'bar', 
+            name = 'Winter', 
+            marker = list(color = colors[1]),
+            visible = TRUE) %>%
+  add_trace(data = df_global_vwc, 
+            x = ~unique(df_seasonal_vwc$Location), 
+            y = rep(df_global_vwc$VWC_Winter, length(unique(df_seasonal_vwc$Location))), 
+            type = 'scatter', 
+            mode = 'lines', 
+            name = 'SEUG VWC_Winter', 
+            line = list(color = '#00B5E2', width = 2),
+            visible = TRUE) %>%
+  
+  add_trace(data = df_seasonal_vwc, 
+            x = ~Location, 
+            y = ~VWC_Spring, 
+            type = 'bar', 
+            name = 'Spring', 
+            marker = list(color = colors[2]),
+            visible = FALSE) %>%
+  add_trace(data = df_global_vwc, 
+            x = ~unique(df_seasonal_vwc$Location), 
+            y = rep(df_global_vwc$VWC_Spring, length(unique(df_seasonal_vwc$Location))), 
+            type = 'scatter', 
+            mode = 'lines', 
+            name = 'SEUG VWC_Spring', 
+            line = list(color = '#00B5E2', width = 2),
+            visible = FALSE) %>%
+  
+  add_trace(data = df_seasonal_vwc, 
+            x = ~Location, 
+            y = ~VWC_Summer, 
+            type = 'bar', 
+            name = 'Summer', 
+            marker = list(color = colors[3]),
+            visible = FALSE) %>%
+  add_trace(data = df_global_vwc, 
+            x = ~unique(df_seasonal_vwc$Location), 
+            y = rep(df_global_vwc$VWC_Summer, length(unique(df_seasonal_vwc$Location))), 
+            type = 'scatter', 
+            mode = 'lines', 
+            name = 'SEUG VWC_Summer', 
+            line = list(color = '#00B5E2', width = 2),
+            visible = FALSE) %>%
+  
+  add_trace(data = df_seasonal_vwc, 
+            x = ~Location, 
+            y = ~VWC_Fall, 
+            type = 'bar', 
+            name = 'Fall', 
+            marker = list(color = colors[4]),
+            visible = FALSE) %>%
+  add_trace(data = df_global_vwc, 
+            x = ~unique(df_seasonal_vwc$Location), 
+            y = rep(df_global_vwc$VWC_Fall, length(unique(df_seasonal_vwc$Location))), 
+            type = 'scatter', 
+            mode = 'lines', 
+            name = 'SEUG VWC_Fall', 
+            line = list(color = '#00B5E2', width = 2),
+            visible = FALSE)
+
+# 添加下拉框
+plot <- plot %>%
+  layout(
+    title = list(
+      text = "Winter Soil Water Content",
+      font = list(
+        family = "Droid Serif",
+        size = 16,
+        color = '#433537'
+      )
+    ),
+    xaxis = list(
+      title = "Location",
+      titlefont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      ),
+      tickfont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      )
+    ),
+    yaxis = list(
+      title = "Volumetric Water Content",
+      titlefont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      ),
+      tickfont = list(
+        family = "Droid Serif",
+        size = 12,
+        color = '#433537'
+      )
+    ),
+    legend = list(
+      font = list(
+        family = "Droid Serif",
+        size = 14,
+        color = '#433537'
+      )
+    ),
+    updatemenus = list(
+      list(
+        buttons = list(
+          list(
+            method = "update",
+            args = list(list(visible = c(TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE)),
+                        list(title = "Winter Soil Water Content")),
+            label = "Winter"
+          ),
+          list(
+            method = "update",
+            args = list(list(visible = c(FALSE, FALSE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE)),
+                        list(title = "Spring Soil Water Content")),
+            label = "Spring"
+          ),
+          list(
+            method = "update",
+            args = list(list(visible = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE, FALSE, FALSE)),
+                        list(title = "Summer Soil Water Content")),
+            label = "Summer"
+          ),
+          list(
+            method = "update",
+            args = list(list(visible = c(FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, TRUE)),
+                        list(title = "Fall Soil Water Content")),
+            label = "Fall"
+          )
+        ),
+        direction = "down",
+        x = 0.1,
+        y = 1.15,
+        showactive = TRUE
+      )
+    ),
+    plot_bgcolor = '#f4ede4',
+    paper_bgcolor = '#f4ede4'
+  )
+
+# 打印图表
+plot
+```
+
+From the bar chart, we can see that four of the regions indeed match our hypothesis. However, intriguingly, the region at (-109.9978, 37.58988) has higher-than-average soil water content in all four seasons, indicating that its soil moisture is excellent and conducive to vegetation growth. So, why is it still one of the most arid regions? We will explain this in the next section.
+
+## Unexpected Discovery! Unveiling (-109.9978, 37.58988) region
+
+As mentioned above, for the "illogical" region (-109.9978, 37.58988), we explain the coexistence of high soil water content and high aridity by comparing the local temperature and precipitation during the summer.
+
+```{r, fig.cap="<span class='figure-caption'>Move the cursor to view the specific precipitation and temperature.</span>"}
+#| echo: false
+#| warning: false
+#| code-fold: true
+#| code-summary: R Libraries
+#| message: false
+
+# 读取数据
+df_historic <- read.csv('NABR_historic.csv')
+df_neartwem <- read.csv('nearterm_data_2020-2024.csv')
+data <- rbind(df_historic, df_neartwem)
+
+# 选择该位置的数据
+specific_location <- data %>%
+  filter(long == -109.9978 & lat == 37.58988)
+
+# 提取该位置的年份、夏季气温和降水量数据
+summer_data <- specific_location %>%
+  select(year, T_Summer, PPT_Summer)
+
+# 检查数据中是否有缺失值，并移除缺失值
+summer_data <- summer_data %>%
+  filter(!is.na(T_Summer) & !is.na(PPT_Summer))
+
+# 计算所有位置的夏季平均气温和降水量
+global_summer_avg <- data %>%
+  group_by(year) %>%
+  summarize(
+    Avg_T_Summer = mean(T_Summer, na.rm = TRUE),
+    Avg_PPT_Summer = mean(PPT_Summer, na.rm = TRUE)
+  )
+
+# 检查数据中是否有缺失值，并移除缺失值
+global_summer_avg <- global_summer_avg %>%
+  filter(!is.na(Avg_T_Summer) & !is.na(Avg_PPT_Summer))
+
+# 计算趋势线
+specific_trend <- lm(PPT_Summer ~ T_Summer, data = summer_data)
+global_trend <- lm(Avg_PPT_Summer ~ Avg_T_Summer, data = global_summer_avg)
+
+# 创建趋势线数据框
+trend_specific <- data.frame(
+  T_Summer = summer_data$T_Summer,
+  Trend_Specific = predict(specific_trend)
+)
+
+trend_global <- data.frame(
+  Avg_T_Summer = global_summer_avg$Avg_T_Summer,
+  Trend_Global = predict(global_trend)
+)
+
+# 绘制散点图并添加趋势线
+plot <- plot_ly() %>%
+  add_trace(
+    data = summer_data,
+    x = ~T_Summer,
+    y = ~PPT_Summer,
+    type = 'scatter',
+    mode = 'markers',
+    marker = list(color = '#012169', size = 10),
+    name = 'Specific Location'
+  ) %>%
+  add_trace(
+    data = trend_specific,
+    x = ~T_Summer,
+    y = ~Trend_Specific,
+    type = 'scatter',
+    mode = 'lines',
+    line = list(color = '#012169'),
+    name = 'Specific Location Trend'
+  ) %>%
+  add_trace(
+    data = global_summer_avg,
+    x = ~Avg_T_Summer,
+    y = ~Avg_PPT_Summer,
+    type = 'scatter',
+    mode = 'markers',
+    marker = list(symbol = 'x', color = '#5FA343', size = 10),
+    name = 'SEUG Average'
+  ) %>%
+  add_trace(
+    data = trend_global,
+    x = ~Avg_T_Summer,
+    y = ~Trend_Global,
+    type = 'scatter',
+    mode = 'lines',
+    line = list(dash = 'dash', color = '#5FA343'),
+    name = 'SEUG Average Trend'
+  ) %>%
+  layout(
+    title = list(
+      text = "Summer Temperature vs. Precipitation",
+      font = list(family = "Droid Serif", size = 16, color = '#433537')
+    ),
+    xaxis = list(
+      title = list(
+        text = "Summer Temperature (°C)",
+        font = list(family = "Droid Serif", size = 12, color = '#433537')
+      ),
+      tickfont = list(family = "Droid Serif", size = 12, color = '#433537')
+    ),
+    yaxis = list(
+      title = list(
+        text = "Summer Precipitation (mm)",
+        font = list(family = "Droid Serif", size = 12, color = '#433537')
+      ),
+      tickfont = list(family = "Droid Serif", size = 12, color = '#433537')
+    ),
+    legend = list(
+      font = list(family = "Droid Serif", size = 14, color = '#433537')
+    ),
+    plot_bgcolor = '#f4ede4',
+    paper_bgcolor = '#f4ede4'
+  )
+
+# 打印图表
+plot
+```
+
+
+By comparing the trend lines of (-109.9978, 37.58988) with the park's average levels, we can see that the slope for the former is significantly smaller than that for the latter. This means that in (-109.9978, 37.58988), even a very slight increase in percipitation is often accompanied by a sharp rise in temperature. This explains our question well: despite the high soil water content in the region (-109.9978, 37.58988), the subsequent high temperatures cause evaporation that far exceeds the water stored in the soil, leading to high aridity in the summer.
